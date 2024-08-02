@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
+	"gonum.org/v1/gonum/graph"
 	"gonum.org/v1/gonum/graph/simple"
 	"gonum.org/v1/gonum/graph/encoding/dot"
 )
@@ -71,7 +71,7 @@ func processFile(path string) (*FileInfo, error) {
 	}, nil
 }
 
-func analyzeFiles(ctx context.Context, llm llms.LanguageModel, kg *KnowledgeGraph, systemPrompt string) error {
+func analyzeFiles(ctx context.Context, llm llms.Model, kg *KnowledgeGraph, systemPrompt string) error {
 	for _, file := range kg.Files {
 		summary, err := summarizeFile(ctx, llm, file, systemPrompt)
 		if err != nil {
@@ -97,36 +97,30 @@ func analyzeFiles(ctx context.Context, llm llms.LanguageModel, kg *KnowledgeGrap
 	return nil
 }
 
-func summarizeFile(ctx context.Context, llm llms.LanguageModel, file *FileInfo, systemPrompt string) (string, error) {
+func summarizeFile(ctx context.Context, llm llms.Model, file *FileInfo, systemPrompt string) (string, error) {
 	prompt := fmt.Sprintf("%s\n\nSummarize the following file content in one concise sentence, capturing the main idea or purpose:\n\nFile name: %s\nContent:\n%s", 
 		systemPrompt, file.Name, file.Content)
 	
-	completion, err := llm.GenerateContent(ctx, []llms.MessageContent{
-		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
-		llms.TextParts(llms.ChatMessageTypeHuman, prompt),
-	})
+	completion, err := llm.Call(ctx, prompt)
 	if err != nil {
 		return "", err
 	}
 	
-	return completion.Choices[0].Content, nil
+	return completion, nil
 }
 
-func calculateSimilarity(ctx context.Context, llm llms.LanguageModel, file1, file2 *FileInfo, systemPrompt string) (float64, error) {
+func calculateSimilarity(ctx context.Context, llm llms.Model, file1, file2 *FileInfo, systemPrompt string) (float64, error) {
 	prompt := fmt.Sprintf("%s\n\nCalculate the similarity between these two file summaries, considering main themes, topics, and purposes. Provide a similarity score between 0 (completely different) and 1 (identical), followed by a brief explanation:\n\nFile 1 (%s): %s\nFile 2 (%s): %s", 
 		systemPrompt, file1.Name, file1.Summary, file2.Name, file2.Summary)
 	
-	completion, err := llm.GenerateContent(ctx, []llms.MessageContent{
-		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
-		llms.TextParts(llms.ChatMessageTypeHuman, prompt),
-	})
+	completion, err := llm.Call(ctx, prompt)
 	if err != nil {
 		return 0, err
 	}
 	
 	// Extract the similarity score from the response
 	var similarity float64
-	_, err = fmt.Sscanf(completion.Choices[0].Content, "%f", &similarity)
+	_, err = fmt.Sscanf(completion, "%f", &similarity)
 	if err != nil {
 		return 0, fmt.Errorf("error parsing similarity score: %v", err)
 	}
@@ -135,16 +129,11 @@ func calculateSimilarity(ctx context.Context, llm llms.LanguageModel, file1, fil
 }
 
 func visualizeGraph(kg *KnowledgeGraph, outputPath string) error {
-	dotGraph := SimpleGraph(kg.Graph)
-	data, err := dot.Marshal(dotGraph, "knowledge_graph", "", "  ")
+	data, err := dot.Marshal(kg.Graph, "knowledge_graph", "", "  ")
 	if err != nil {
 		return fmt.Errorf("error marshaling graph: %v", err)
 	}
 	return os.WriteFile(outputPath, data, 0644)
-}
-
-func SimpleGraph(g interface{}) dot.Graph {
-	return struct{ G interface{} }{g}
 }
 
 func main() {
