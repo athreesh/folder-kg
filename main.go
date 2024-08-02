@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -61,7 +60,7 @@ func readSystemPrompt(filename string) (string, error) {
 func processFile(path string) (*FileInfo, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading file %s: %v", path, err)
 	}
 
 	return &FileInfo{
@@ -76,7 +75,7 @@ func analyzeFiles(ctx context.Context, llm llms.LanguageModel, kg *KnowledgeGrap
 	for _, file := range kg.Files {
 		summary, err := summarizeFile(ctx, llm, file, systemPrompt)
 		if err != nil {
-			return err
+			return fmt.Errorf("error summarizing file %s: %v", file.Path, err)
 		}
 		file.Summary = summary
 	}
@@ -86,9 +85,9 @@ func analyzeFiles(ctx context.Context, llm llms.LanguageModel, kg *KnowledgeGrap
 			if path1 != path2 {
 				similarity, err := calculateSimilarity(ctx, llm, file1, file2, systemPrompt)
 				if err != nil {
-					return err
+					return fmt.Errorf("error calculating similarity between %s and %s: %v", path1, path2, err)
 				}
-				if similarity > 0.5 {
+				if similarity > 0.5 { // Arbitrary threshold, adjust as needed
 					kg.AddEdge(path1, path2, similarity)
 				}
 			}
@@ -99,7 +98,9 @@ func analyzeFiles(ctx context.Context, llm llms.LanguageModel, kg *KnowledgeGrap
 }
 
 func summarizeFile(ctx context.Context, llm llms.LanguageModel, file *FileInfo, systemPrompt string) (string, error) {
-	prompt := fmt.Sprintf("Summarize the following file content in one sentence:\n\nFile name: %s\nContent:\n%s", file.Name, file.Content)
+	prompt := fmt.Sprintf("%s\n\nSummarize the following file content in one concise sentence, capturing the main idea or purpose:\n\nFile name: %s\nContent:\n%s", 
+		systemPrompt, file.Name, file.Content)
+	
 	completion, err := llm.GenerateContent(ctx, []llms.MessageContent{
 		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
 		llms.TextParts(llms.ChatMessageTypeHuman, prompt),
@@ -107,11 +108,14 @@ func summarizeFile(ctx context.Context, llm llms.LanguageModel, file *FileInfo, 
 	if err != nil {
 		return "", err
 	}
+	
 	return completion.Choices[0].Content, nil
 }
 
 func calculateSimilarity(ctx context.Context, llm llms.LanguageModel, file1, file2 *FileInfo, systemPrompt string) (float64, error) {
-	prompt := fmt.Sprintf("Calculate the similarity between these two file summaries:\n\nFile 1 (%s): %s\nFile 2 (%s): %s\n\nProvide only the numerical score between 0 and 1.", file1.Name, file1.Summary, file2.Name, file2.Summary)
+	prompt := fmt.Sprintf("%s\n\nCalculate the similarity between these two file summaries, considering main themes, topics, and purposes. Provide a similarity score between 0 (completely different) and 1 (identical), followed by a brief explanation:\n\nFile 1 (%s): %s\nFile 2 (%s): %s", 
+		systemPrompt, file1.Name, file1.Summary, file2.Name, file2.Summary)
+	
 	completion, err := llm.GenerateContent(ctx, []llms.MessageContent{
 		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
 		llms.TextParts(llms.ChatMessageTypeHuman, prompt),
@@ -119,18 +123,28 @@ func calculateSimilarity(ctx context.Context, llm llms.LanguageModel, file1, fil
 	if err != nil {
 		return 0, err
 	}
+	
+	// Extract the similarity score from the response
 	var similarity float64
-	_, err = fmt.Sscanf(strings.TrimSpace(completion.Choices[0].Content), "%f", &similarity)
-	return similarity, err
+	_, err = fmt.Sscanf(completion.Choices[0].Content, "%f", &similarity)
+	if err != nil {
+		return 0, fmt.Errorf("error parsing similarity score: %v", err)
+	}
+	
+	return similarity, nil
 }
 
 func visualizeGraph(kg *KnowledgeGraph, outputPath string) error {
-	dotGraph := dot.NewGraph(kg.Graph)
+	dotGraph := SimpleGraph(kg.Graph)
 	data, err := dot.Marshal(dotGraph, "knowledge_graph", "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("error marshaling graph: %v", err)
 	}
 	return os.WriteFile(outputPath, data, 0644)
+}
+
+func SimpleGraph(g interface{}) dot.Graph {
+	return struct{ G interface{} }{g}
 }
 
 func main() {
